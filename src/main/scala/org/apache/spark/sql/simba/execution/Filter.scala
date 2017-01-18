@@ -21,13 +21,142 @@ import org.apache.spark.sql.simba.spatial.Point
 import org.apache.spark.sql.simba.util.ShapeUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression, Literal, SortOrder}
-import org.apache.spark.sql.catalyst.expressions.{And => SQLAnd, Not => SQLNot, Or => SQLOr}
+import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode, ExpressionCanonicalizer}
+import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, BindReferences, Expression, IsNotNull, Literal, NullIntolerant, PredicateHelper, SortOrder, And => SQLAnd, Not => SQLNot, Or => SQLOr}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
-import org.apache.spark.sql.execution.SparkPlan
+import org.apache.spark.sql.execution.metric.SQLMetrics
+import org.apache.spark.sql.execution.{CodegenSupport, SparkPlan}
 
-case class Filter(condition: Expression, child: SparkPlan) extends SimbaPlan {
-   override def output: Seq[Attribute] = child.output
+case class Filter(condition: Expression, child: SparkPlan)
+  extends SimbaPlan  with CodegenSupport with PredicateHelper {
+
+  // Split out all the IsNotNulls from condition.
+  private val (notNullPreds, otherPreds) = splitConjunctivePredicates(condition).partition {
+    case IsNotNull(a) => isNullIntolerant(a) && a.references.subsetOf(child.outputSet)
+    case _ => false
+  }
+
+  // If one expression and its children are null intolerant, it is null intolerant.
+  private def isNullIntolerant(expr: Expression): Boolean = expr match {
+    case e: NullIntolerant => e.children.forall(isNullIntolerant)
+    case _ => false
+  }
+
+  // The columns that will filtered out by `IsNotNull` could be considered as not nullable.
+  private val notNullAttributes = notNullPreds.flatMap(_.references).distinct.map(_.exprId)
+
+  // Mark this as empty. We'll evaluate the input during doConsume(). We don't want to evaluate
+  // all the variables at the beginning to take advantage of short circuiting.
+  override def usedInputs: AttributeSet = AttributeSet.empty
+
+  override def output: Seq[Attribute] = {
+    child.output.map { a =>
+      if (a.nullable && notNullAttributes.contains(a.exprId)) {
+        a.withNullability(false)
+      } else {
+        a
+      }
+    }
+  }
+
+  override lazy val metrics = Map(
+    "numOutputRows" -> SQLMetrics.createMetric(sparkContext, "number of output rows"))
+
+  override def inputRDDs(): Seq[RDD[InternalRow]] = {
+    child.asInstanceOf[CodegenSupport].inputRDDs()
+  }
+
+  protected override def doProduce(ctx: CodegenContext): String = {
+    child.asInstanceOf[CodegenSupport].produce(ctx, this)
+  }
+
+  override def doConsume(ctx: CodegenContext, input: Seq[ExprCode], row: ExprCode): String = {
+    val numOutput = metricTerm(ctx, "numOutputRows")
+
+    /**
+      * Generates code for `c`, using `in` for input attributes and `attrs` for nullability.
+      */
+    def genPredicate(c: Expression, in: Seq[ExprCode], attrs: Seq[Attribute]): String = {
+      val bound = BindReferences.bindReference(c, attrs)
+      val evaluated = evaluateRequiredVariables(child.output, in, c.references)
+
+      // Generate the code for the predicate.
+      val ev = ExpressionCanonicalizer.execute(bound).genCode(ctx)
+      val nullCheck = if (bound.nullable) {
+        s"${ev.isNull} || "
+      } else {
+        s""
+      }
+
+      s"""
+         |$evaluated
+         |${ev.code}
+         |if (${nullCheck}!${ev.value}) continue;
+       """.stripMargin
+    }
+
+    ctx.currentVars = input
+
+    // To generate the predicates we will follow this algorithm.
+    // For each predicate that is not IsNotNull, we will generate them one by one loading attributes
+    // as necessary. For each of both attributes, if there is an IsNotNull predicate we will
+    // generate that check *before* the predicate. After all of these predicates, we will generate
+    // the remaining IsNotNull checks that were not part of other predicates.
+    // This has the property of not doing redundant IsNotNull checks and taking better advantage of
+    // short-circuiting, not loading attributes until they are needed.
+    // This is very perf sensitive.
+    // TODO: revisit this. We can consider reordering predicates as well.
+    val generatedIsNotNullChecks = new Array[Boolean](notNullPreds.length)
+    val generated = otherPreds.map { c =>
+      val nullChecks = c.references.map { r =>
+        val idx = notNullPreds.indexWhere { n => n.asInstanceOf[IsNotNull].child.semanticEquals(r)}
+        if (idx != -1 && !generatedIsNotNullChecks(idx)) {
+          generatedIsNotNullChecks(idx) = true
+          // Use the child's output. The nullability is what the child produced.
+          genPredicate(notNullPreds(idx), input, child.output)
+        } else {
+          ""
+        }
+      }.mkString("\n").trim
+
+      // Here we use *this* operator's output with this output's nullability since we already
+      // enforced them with the IsNotNull checks above.
+      s"""
+         |$nullChecks
+         |${genPredicate(c, input, output)}
+       """.stripMargin.trim
+    }.mkString("\n")
+
+    val nullChecks = notNullPreds.zipWithIndex.map { case (c, idx) =>
+      if (!generatedIsNotNullChecks(idx)) {
+        genPredicate(c, input, child.output)
+      } else {
+        ""
+      }
+    }.mkString("\n")
+
+    // Reset the isNull to false for the not-null columns, then the followed operators could
+    // generate better code (remove dead branches).
+    val resultVars = input.zipWithIndex.map { case (ev, i) =>
+      if (notNullAttributes.contains(child.output(i).exprId)) {
+        ev.isNull = "false"
+      }
+      ev
+    }
+
+    s"""
+       |$generated
+       |$nullChecks
+       |$numOutput.add(1);
+       |${consume(ctx, resultVars)}
+     """.stripMargin
+  }
+
+
+  override def outputOrdering: Seq[SortOrder] = child.outputOrdering
+
+  override def outputPartitioning: Partitioning = child.outputPartitioning
+
 
   private class DistanceOrdering(point: Expression, target: Point) extends Ordering[InternalRow] {
     override def compare(x: InternalRow, y: InternalRow): Int = {
@@ -73,13 +202,13 @@ case class Filter(condition: Expression, child: SparkPlan) extends SimbaPlan {
         else rdd.map(_.copy()).subtract(applyCondition(rdd, c).map(_.copy()))
       case _ =>
         {
-          val predicate =newPredicate(condition, child.output)
+          @transient val predicate =newPredicate(condition, child.output)
           rdd.mapPartitions{ iter => iter.filter(row => predicate.eval(row))}
         }
     }
   }
 
-  protected def doExecute(): RDD[InternalRow] = {
+  protected override def doExecute(): RDD[InternalRow] = {
     val root_rdd = child.execute()
     condition transformUp {
       case SQLAnd(left, right) => And(left, right)
@@ -89,8 +218,6 @@ case class Filter(condition: Expression, child: SparkPlan) extends SimbaPlan {
     applyCondition(root_rdd, condition)
   }
 
-  override def outputOrdering: Seq[SortOrder] = child.outputOrdering
-
   override def children: Seq[SparkPlan] = child :: Nil
-  override def outputPartitioning: Partitioning = child.outputPartitioning
+
 }

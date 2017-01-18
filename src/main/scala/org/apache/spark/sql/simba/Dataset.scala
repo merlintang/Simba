@@ -40,8 +40,12 @@ class Dataset[T] private[simba]
 {
 
     def this(sparkSession: simba.SparkSession, logicalPlan: LogicalPlan, encoder: Encoder[T]) = {
-    this(sparkSession, sparkSession.sessionState.executePlan(logicalPlan), encoder)
+      this(sparkSession, {
+        val qe = sparkSession.sessionState.executePlan(logicalPlan)
+        qe
+      }, encoder)
   }
+
 
   /**
     * Spatial operation, range query.
@@ -223,24 +227,7 @@ class Dataset[T] private[simba]
   }
 
 
-  @transient override private[sql] val logicalPlan: LogicalPlan = {
-    def hasSideEffects(plan: LogicalPlan): Boolean = plan match {
-      case _: Command |
-           _: InsertIntoTable => true
-      case _ => false
-    }
 
-    queryExecution.analyzed match {
-      // For various commands (like DDL) and queries with side effects, we force query execution
-      // to happen right away to let these side effects take place eagerly.
-      case p if hasSideEffects(p) =>
-        LogicalRDD(queryExecution.analyzed.output, queryExecution.toRdd)(sparkSession)
-      case Union(children) if children.forall(hasSideEffects) =>
-        LogicalRDD(queryExecution.analyzed.output, queryExecution.toRdd)(sparkSession)
-      case _ =>
-        queryExecution.analyzed
-    }
-  }
 
   private def getAttributes(keys: Array[String], attrs: Seq[Attribute] = this.queryExecution.analyzed.output)
   : Array[Attribute] = {

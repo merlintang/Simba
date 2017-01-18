@@ -27,7 +27,7 @@ import org.apache.spark.sql.simba.util.ShapeUtils
   * Created by dongx on 11/10/16.
   */
 case class InRange(shape: Expression, range_low: Expression, range_high: Expression)
-  extends Predicate with CodegenFallback{
+  extends Predicate with CodegenFallback with Serializable{
   override def nullable: Boolean = false
 
   override def eval(input: InternalRow): Any = {

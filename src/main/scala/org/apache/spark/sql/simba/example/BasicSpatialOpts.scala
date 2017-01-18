@@ -2,9 +2,7 @@ package org.apache.spark.sql.simba.example
 
 import org.apache.spark.sql.simba.{SparkSession}
 
-/**
-  * Created by mtang on 1/17/17.
-  */
+
 object BasicSpatialOpts {
   case class PointData(x: Double, y: Double, z: Double, other: String)
 

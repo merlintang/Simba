@@ -53,9 +53,19 @@ case class RKJSpark(left_key: Expression, right_key: Expression, l: Literal,
       (ShapeUtils.getShape(right_key, right.output, row).asInstanceOf[Point], row)
     )
 
-    val right_sampled = right_rdd
+    var right_sampled = right_rdd
       .sample(withReplacement = false, sample_rate, System.currentTimeMillis())
       .map(_._1).collect().zipWithIndex
+
+    var tmprate = sample_rate
+    while(right_sampled.length < 2)
+      {
+         tmprate = tmprate*10
+        right_sampled = right_rdd
+          .sample(withReplacement = false, sample_rate*10, System.currentTimeMillis())
+          .map(_._1).collect().zipWithIndex
+      }
+
     val right_rt = RTree(right_sampled, max_entries_per_node)
     val dimension = right_sampled.head._1.coord.length
 

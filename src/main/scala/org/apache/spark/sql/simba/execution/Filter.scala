@@ -21,7 +21,6 @@ import org.apache.spark.sql.simba.spatial.Point
 import org.apache.spark.sql.simba.util.ShapeUtils
 import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.codegen.{CodegenContext, ExprCode, ExpressionCanonicalizer}
 import org.apache.spark.sql.catalyst.expressions.{Attribute, AttributeSet, BindReferences, Expression, IsNotNull, Literal, NullIntolerant, PredicateHelper, SortOrder, And => SQLAnd, Not => SQLNot, Or => SQLOr}
 import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.execution.metric.SQLMetrics

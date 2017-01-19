@@ -24,9 +24,10 @@ import org.apache.spark.sql.execution.SparkPlan
   * Created by dongx on 11/11/16.
   */
 abstract class SimbaPlan extends SparkPlan{
+
   @transient
   protected[simba] final val simbaSesstionState =  SparkSession.getActiveSession.map(_.sessionState).orNull
 
-
+  protected override def sparkContext = SparkSession.getActiveSession.map(_.sparkContext).orNull
 
 }

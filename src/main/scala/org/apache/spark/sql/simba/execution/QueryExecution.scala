@@ -19,7 +19,10 @@ class QueryExecution(val simbaSession: SparkSession, val simbaLogical: LogicalPl
     simbaSession.sessionState.simbaOptimizer.execute(simbaSession.sessionState.getSQLOptimizer.execute(withIndexedData))
   }
 
-  override lazy val sparkPlan: SparkPlan = {
+  override lazy val sparkPlan: SparkPlan ={
+
+    SparkSession.setActiveSession(simbaSession)
     simbaSession.sessionState.simbaPlanner.plan(optimizedPlan).next()
   }
+
 }

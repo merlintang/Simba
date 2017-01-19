@@ -21,9 +21,7 @@ import org.apache.spark.sql.catalyst.expressions.{Attribute, Expression}
 import org.apache.spark.sql.catalyst.plans.logical.{BinaryNode, LogicalPlan}
 import org.apache.spark.sql.types.BooleanType
 
-/**
-  * Created by dongx on 11/13/2016.
-  */
+
 case class SpatialJoin(left: LogicalPlan, right: LogicalPlan, joinType: SpatialJoinType,
                        condition: Option[Expression]) extends BinaryNode {
   override def output: Seq[Attribute] = {

@@ -26,7 +26,8 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.execution.metric.SQLMetrics
 import org.apache.spark.sql.execution.{CodegenSupport, SparkPlan}
 
-case class Filter(condition: Expression, child: SparkPlan)
+/** Physical plan for Spatial Filter. */
+case class FilterExec(condition: Expression, child: SparkPlan)
   extends SimbaPlan with PredicateHelper {
 
   // Split out all the IsNotNulls from condition.

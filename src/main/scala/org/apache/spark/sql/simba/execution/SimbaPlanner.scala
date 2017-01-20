@@ -199,7 +199,7 @@ class SimbaPlanner(val simbaContext: SparkSession,
   object SimbaFilter extends Strategy {
     def apply(plan: LogicalPlan): Seq[SparkPlan] = plan match {
       case logical.Filter(condition, child) =>
-        Filter(condition, planLater(child)) :: Nil
+        FilterExec(condition, planLater(child)) :: Nil
       case _ => Nil
     }
   }
@@ -215,10 +215,10 @@ class SimbaPlanner(val simbaContext: SparkSession,
     if (AttributeSet(projectList.map(_.toAttribute)) == projectSet &&
       filterSet.subsetOf(projectSet)) {
       val scan = scanBuilder(projectList.asInstanceOf[Seq[Attribute]])
-      filterCondition.map(Filter(_, scan)).getOrElse(scan)
+      filterCondition.map(FilterExec(_, scan)).getOrElse(scan)
     } else {
       val scan = scanBuilder((projectSet ++ filterSet).toSeq)
-      val res = filterCondition.map(Filter(_, scan)).getOrElse(scan)
+      val res = filterCondition.map(FilterExec(_, scan)).getOrElse(scan)
       ProjectExec(projectList, res)
     }
   }

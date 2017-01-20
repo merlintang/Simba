@@ -22,10 +22,6 @@ import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.simba.SparkSession
 
-/**
-  * Created by dong on 1/15/16.
-  * Indexed Relation Structures for Simba
-  */
 
 private[simba] case class IPartition(data: Array[InternalRow], index: Index)
 
